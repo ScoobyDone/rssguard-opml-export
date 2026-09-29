@@ -1,0 +1,71 @@
+PROCEDURE ExportRssGuardOPML(databasePath, optional accountId)
+    REQUIRE databasePath refers to an existing SQLite database file
+    OPEN database with SQLite READ-ONLY mode and 10-second lock timeout
+    BEGIN read transaction for a consistent snapshot (including committed WAL data)
+    READ Accounts: id, ordr, type
+    READ Categories: id, ordr, parent_id, title, description, account_id
+    READ Feeds: id, ordr, category, title, description, source, custom_data, account_id
+    CLOSE database
+
+    IF accountId supplied:
+        REQUIRE account exists
+        FILTER all three collections to that account
+
+    CREATE XML document, declaration UTF-8, standalone=yes
+    CREATE <opml version="2.0"
+            xmlns:rssguard="https://github.com/martinrotter/rssguard">
+        CREATE <head>
+            CREATE <title>RSS Guard</title>
+            CREATE <dateCreated>current UTC time in RFC 822 format</dateCreated>
+        CREATE <body>
+
+    visited = empty set
+    FOR account IN Accounts sorted by (ordr, id):
+        EmitChildren(account, parentId=-1, xmlParent=body, depth=0)
+    REQUIRE visited count equals selected category count plus selected feed count
+        OTHERWISE reject orphaned rows or unreachable cyclic folders
+
+    SERIALIZE whole document in memory, two-space indentation
+    VERIFY valid XML 1.0 and properly escaped attribute values
+        Preserve newlines/tabs/CR inside attributes using character references
+    WRITE completed OPML to stdout, with a final newline
+    EXIT success (0)
+
+    ON ANY ERROR:
+        WRITE diagnostic only to stderr
+        EXIT nonzero without writing partial OPML
+
+PROCEDURE EmitChildren(account, parentId, xmlParent, depth)
+    REQUIRE depth <= 200
+    children = categories where account_id=account.id and parent_id=parentId
+               PLUS feeds where account_id=account.id and category=parentId
+    SORT children by (ordr, kind, id); categories precede feeds on ties
+
+    FOR child IN children:
+        REQUIRE (kind, account_id, id) is not already visited
+        MARK child visited
+        CREATE outline with text=title and description=description-or-empty
+        IF category:
+            APPEND outline to xmlParent
+            EmitChildren(account, child.id, outline, depth+1)
+        ELSE:
+            ADD type="rss", title=title, xmlUrl=source-or-empty
+            IF account.type == "std-rss":
+                PARSE custom_data as JSON object; empty/null becomes {}
+                ADD encoding=custom_data.encoding-or-empty
+                ADD rssguard:xmlUrlType=custom_data.source_type-or-0
+                ADD rssguard:postProcess=custom_data.post_process-or-empty
+                MAP custom_data.type (default 0) to version:
+                    0 or 1 -> RSS; 2 -> RSS1; 3 -> ATOM; 4 -> JSON
+                    5 -> Sitemap; 9 -> MediaWiki
+                    Other values -> omit version, as the current app exporter does
+            APPEND outline to xmlParent
+
+Notes:
+- All accounts are exported by default; their root outlines share one OPML body.
+- Account identity is not encoded in the resulting OPML.
+- Use an account ID to approximate an in-app single-account export.
+- Icons are intentionally omitted (equivalent to disabling icon export).
+- Never execute feed scripts/post-processing commands; export them as text only.
+- Nonstandard service accounts get generic feed outlines, not service-specific
+  settings or an exact emulation of those services' own export functions.
