@@ -3,7 +3,7 @@ v6 astra medium.
 i spent 5 minutes writing the prompt.
 it spent 5 minutes writing it out.
 i spent 5 minutes reviewing it and didn't see anything worth spending more time on it.
-i ran it twice and it worked both times just fine
+i ran it twice and it worked both times just fine.
 enjoy.
 
 
